@@ -103,6 +103,10 @@ export default function CesiumGlobe({ mode, frame, nodeFrame, selectedNodeId }) 
       <div className="map-hud">
         <strong>{mode === 'node' ? 'Node Tactical View' : 'Vietnam Network View'}</strong>
         <span>Projection: satellite ground track</span>
+        <div className="map-legend">
+          <span><i className="legend-dot gateway" /> Gateway</span>
+          <span><i className="legend-dot router" /> UT / Router</span>
+        </div>
       </div>
     </div>
   );
@@ -378,15 +382,28 @@ function satelliteLabel(sat, routeCount, { active, primary }) {
 function addNodeEntity(viewer, node, alive, selected = false) {
   const color = node.type === 'router' ? COLOR.router : COLOR.gateway;
   const labelSide = node.type === 'router' ? 1 : -1;
+  const pointSize = selected ? 24 : 20;
+  const ringSize = selected ? 36 : 33;
+  viewer.entities.add({
+    id: `node-ring-${node.id}`,
+    position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 0),
+    point: {
+      pixelSize: ringSize,
+      color: Cesium.Color.TRANSPARENT,
+      outlineWidth: node.type === 'router' ? 5 : 6,
+      outlineColor: Cesium.Color.fromCssColorString(alive ? color : COLOR.inactive).withAlpha(0.9),
+      disableDepthTestDistance: Number.POSITIVE_INFINITY
+    }
+  });
+
   viewer.entities.add({
     id: `node-${node.id}`,
     position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 0),
     point: {
-      pixelSize: selected ? 24 : 19,
+      pixelSize: pointSize,
       color: Cesium.Color.fromCssColorString(alive ? color : COLOR.inactive),
-      outlineWidth: selected ? 5 : 4,
-      outlineColor: Cesium.Color.WHITE,
-      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      outlineWidth: selected ? 6 : 5,
+      outlineColor: node.type === 'router' ? Cesium.Color.BLACK : Cesium.Color.WHITE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY
     },
     label: {
@@ -397,7 +414,7 @@ function addNodeEntity(viewer, node, alive, selected = false) {
       outlineWidth: 4,
       style: Cesium.LabelStyle.FILL_AND_OUTLINE,
       horizontalOrigin: node.type === 'router' ? Cesium.HorizontalOrigin.LEFT : Cesium.HorizontalOrigin.RIGHT,
-      pixelOffset: new Cesium.Cartesian2(labelSide * (selected ? 18 : 14), selected ? -30 : -24),
+      pixelOffset: new Cesium.Cartesian2(labelSide * (selected ? 42 : 36), selected ? -36 : -30),
       disableDepthTestDistance: Number.POSITIVE_INFINITY
     }
   });
@@ -413,7 +430,7 @@ function addLinkEntity(viewer, node, sat, qualityLevel, routeCount = 1, primary 
       clampToGround: true,
       arcType: Cesium.ArcType.GEODESIC,
       material: color.withAlpha(primary ? 0.9 : 0.68),
-      zIndex: primary ? 8 : 5
+      zIndex: primary ? 8 : 4
     }
   });
 }

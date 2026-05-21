@@ -110,11 +110,7 @@ export class NetworkNode {
 
   summarizeRoutes(routes, traffic = null) {
     const primary = choosePrimaryRoute(routes);
-    const role = primary
-      ? roleLabel(primary.linkType, primary.freqUlGhz, primary.freqDlGhz)
-      : this.type === 'router'
-        ? 'UT'
-        : 'GW';
+    const role = nodeRoleLabel(this.type);
     const avgSinr = average(routes.map((route) => route.sinrDlDb));
     const quality = qualityFromSinr(avgSinr);
     const uplinkLossDb = average(routes.map((route) => route.fsplUlDb + route.atmUlDb));
@@ -158,4 +154,8 @@ export function choosePrimaryRoute(routes) {
     if (sinrDelta !== 0) return sinrDelta;
     return (right.elevationUlDeg ?? -Infinity) - (left.elevationUlDeg ?? -Infinity);
   })[0];
+}
+
+function nodeRoleLabel(type) {
+  return type === 'router' ? 'UT (29.5GHz/19.7GHz)' : 'GW (27.5GHz/17.7GHz)';
 }

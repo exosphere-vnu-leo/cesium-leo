@@ -240,9 +240,6 @@ function SystemDashboard({ frame, manifest }) {
               <div className={sat.active ? 'sat-plane-row active' : 'sat-plane-row'} key={sat.id}>
                 <strong>{sat.name}</strong>
                 <span>{sat.active ? `${sat.routeCount} flows` : `slot ${sat.slotInPlane}`}</span>
-                <small>
-                  {sat.lat?.toFixed(1)}°, {sat.lon?.toFixed(1)}°
-                </small>
               </div>
             ))}
           </div>
@@ -331,8 +328,8 @@ function NodeDashboard({ manifest, frame, nodeFrame, selectedNodeId, onNodeChang
             tone="cyan"
           />
           <MetricCard
-            label="Elevation"
-            value={node?.elevationDeg != null ? `${node.elevationDeg.toFixed(2)}°` : 'n/a'}
+            label="Primary Sat"
+            value={node?.primarySatelliteName ?? 'n/a'}
             detail={nodeFrame?.antenna ? `${nodeFrame.antenna.rangeKm} km range` : 'No primary'}
             icon={<Satellite size={18} />}
             tone="amber"
@@ -354,7 +351,10 @@ function NodeDashboard({ manifest, frame, nodeFrame, selectedNodeId, onNodeChang
         </div>
 
         <section className="panel-block">
-          <h2>Loss & SINR</h2>
+          <div className="section-heading">
+            <h2>Loss & SINR</h2>
+            <span>avg outgoing routes, last 60s</span>
+          </div>
           <Sparkline
             series={nodeFrame?.lossSeries ?? []}
             keys={['uplinkLossDb', 'downlinkLossDb', 'sinrDlDb']}
@@ -363,19 +363,27 @@ function NodeDashboard({ manifest, frame, nodeFrame, selectedNodeId, onNodeChang
               downlinkLossDb: 'Downlink',
               sinrDlDb: 'SINR'
             }}
+            units={{
+              uplinkLossDb: 'dB',
+              downlinkLossDb: 'dB',
+              sinrDlDb: 'dB'
+            }}
+            normalizeEach
           />
         </section>
 
         <section className="panel-block">
-          <h2>Active Routes</h2>
+          <div className="section-heading">
+            <h2>Active Routes</h2>
+            <span>next satellite and link quality</span>
+          </div>
           <div className="route-list">
             {(nodeFrame?.activeRoutes ?? []).map((route) => (
               <div className="route-row" key={`${route.dstId}-${route.satelliteId}`}>
-                <div>
-                  <strong>{route.dstName}</strong>
-                  <small>{route.satelliteName}</small>
+                <div className="route-target">
+                  <strong>to {route.dstName}</strong>
+                  <small>via {route.satelliteName}</small>
                 </div>
-                <span>{route.elevationUlDeg.toFixed(2)}°</span>
                 <QualityBadge quality={route.quality} sinr={route.sinrDlDb} />
               </div>
             ))}
@@ -388,7 +396,6 @@ function NodeDashboard({ manifest, frame, nodeFrame, selectedNodeId, onNodeChang
             {(nodeFrame?.visibleSatellites ?? []).slice(0, 16).map((sat) => (
               <span className={sat.active ? 'sat-chip active' : 'sat-chip'} key={sat.id}>
                 {sat.name}
-                <small>{sat.elevationDeg?.toFixed(1)}°</small>
               </span>
             ))}
           </div>
