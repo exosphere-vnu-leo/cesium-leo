@@ -45,6 +45,44 @@ export function createApp(engine = new SimulationEngine(config.data)) {
     });
   });
 
+  app.post('/api/routers/:id/location', (req, res, next) => {
+    try {
+      res.json({ node: engine.updateRouterLocation(req.params.id, req.body) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/routers/:id/location/reset', (req, res, next) => {
+    try {
+      res.json({ node: engine.resetRouterLocation(req.params.id) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/routers/:id/plan', (req, res, next) => {
+    try {
+      res.json({
+        node: engine.updateRouterPlan(req.params.id, req.body.planType ?? req.body.plan_type, req.body.t)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/api/routers/:id/mac', (req, res, next) => {
+    try {
+      res.json(engine.updateRouterMac(req.params.id, req.body.macAddress ?? req.body.mac_address));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/api/violations', (req, res) => {
+    res.json({ violations: engine.getViolations(req.query.limit) });
+  });
+
   const distDir = path.resolve(__dirname, '..', 'dist');
   app.use(express.static(distDir));
   app.get(/.*/, (req, res, next) => {

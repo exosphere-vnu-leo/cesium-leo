@@ -380,18 +380,20 @@ function satelliteLabel(sat, routeCount, { active, primary }) {
 }
 
 function addNodeEntity(viewer, node, alive, selected = false) {
-  const color = node.type === 'router' ? COLOR.router : COLOR.gateway;
+  const status = node.status ?? 'ACTIVE';
+  const color = status === 'SUSPENDED' ? COLOR.critical : node.type === 'router' ? COLOR.router : COLOR.gateway;
   const labelSide = node.type === 'router' ? 1 : -1;
   const pointSize = selected ? 24 : 20;
   const ringSize = selected ? 36 : 33;
+  const active = alive && status !== 'SUSPENDED' && status !== 'DISCONNECTED';
   viewer.entities.add({
     id: `node-ring-${node.id}`,
     position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 0),
     point: {
       pixelSize: ringSize,
       color: Cesium.Color.TRANSPARENT,
-      outlineWidth: node.type === 'router' ? 5 : 6,
-      outlineColor: Cesium.Color.fromCssColorString(alive ? color : COLOR.inactive).withAlpha(0.9),
+      outlineWidth: status === 'SUSPENDED' ? 7 : node.type === 'router' ? 5 : 6,
+      outlineColor: Cesium.Color.fromCssColorString(active ? color : COLOR.inactive).withAlpha(0.9),
       disableDepthTestDistance: Number.POSITIVE_INFINITY
     }
   });
@@ -401,7 +403,7 @@ function addNodeEntity(viewer, node, alive, selected = false) {
     position: Cesium.Cartesian3.fromDegrees(node.lon, node.lat, 0),
     point: {
       pixelSize: pointSize,
-      color: Cesium.Color.fromCssColorString(alive ? color : COLOR.inactive),
+      color: Cesium.Color.fromCssColorString(active || status === 'SUSPENDED' ? color : COLOR.inactive),
       outlineWidth: selected ? 6 : 5,
       outlineColor: node.type === 'router' ? Cesium.Color.BLACK : Cesium.Color.WHITE,
       disableDepthTestDistance: Number.POSITIVE_INFINITY
@@ -449,7 +451,7 @@ function focusOnSystemFrame(viewer, frame, focusKeyRef) {
 }
 
 function focusOnNodeScene(viewer, nodeFrame, focusKeyRef) {
-  const key = `node-${nodeFrame.node.id}`;
+  const key = `node-${nodeFrame.node.id}-${nodeFrame.node.lat}-${nodeFrame.node.lon}`;
   if (focusKeyRef.current === key) return;
   focusKeyRef.current = key;
   safeResize(viewer);

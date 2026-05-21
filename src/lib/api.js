@@ -1,5 +1,19 @@
 export async function getJson(path, signal) {
-  const response = await fetch(path, { signal });
+  return parseJsonResponse(await fetch(path, { signal }));
+}
+
+export async function postJson(path, body, signal) {
+  return parseJsonResponse(
+    await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+      signal
+    })
+  );
+}
+
+async function parseJsonResponse(response) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed: ${response.status}`);

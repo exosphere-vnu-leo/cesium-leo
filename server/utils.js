@@ -9,6 +9,9 @@ export const NAME_ALIASES = new Map([
   ['HoChiMinhCity', 'HoChiMinh']
 ]);
 
+const DEG_TO_RAD = Math.PI / 180;
+const EARTH_RADIUS_KM = 6371;
+
 export function toNumber(value, fallback = null) {
   if (value === undefined || value === null || value === '') return fallback;
   const parsed = Number(value);
@@ -111,4 +114,16 @@ export function uniqBy(items, keyFn) {
     }
   }
   return result;
+}
+
+export function haversineDistanceKm(latA, lonA, latB, lonB) {
+  if (![latA, lonA, latB, lonB].every(Number.isFinite)) return null;
+  const dLat = (latB - latA) * DEG_TO_RAD;
+  const dLon = (lonB - lonA) * DEG_TO_RAD;
+  const aLat = latA * DEG_TO_RAD;
+  const bLat = latB * DEG_TO_RAD;
+  const hav =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(aLat) * Math.cos(bLat) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(hav)));
 }

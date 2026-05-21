@@ -54,7 +54,9 @@ button {
 .node-toolbar,
 .metric-top,
 .chart-legend,
-.rain-alert {
+.rain-alert,
+.runtime-summary,
+.runtime-button-pair {
   display: flex;
   align-items: center;
 }
@@ -205,6 +207,29 @@ button {
   background: #24231f;
   color: #f7f3ea;
   padding: 0 12px;
+}
+
+.router-shortcuts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.router-shortcuts button {
+  min-height: 34px;
+  border: 1px solid rgba(255, 122, 182, 0.42);
+  background: rgba(255, 122, 182, 0.1);
+  color: #ffe4ef;
+  font-weight: 900;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.router-shortcuts button.selected {
+  color: #111;
+  background: #ff7ab6;
+  border-color: #ff7ab6;
 }
 
 .globe-panel,
@@ -381,14 +406,16 @@ button {
 .node-list,
 .handover-list,
 .route-list,
-.sat-plane-list {
+.sat-plane-list,
+.suspended-list {
   display: grid;
   gap: 8px;
 }
 
 .node-row,
 .handover-row,
-.route-row {
+.route-row,
+.suspended-row {
   display: grid;
   align-items: center;
   gap: 10px;
@@ -398,7 +425,7 @@ button {
 }
 
 .node-row {
-  grid-template-columns: 14px minmax(0, 1fr) minmax(116px, auto);
+  grid-template-columns: 14px minmax(0, 1fr) auto auto minmax(116px, auto);
   align-items: center;
   padding: 10px 12px;
 }
@@ -420,6 +447,59 @@ button {
   justify-self: end;
   white-space: nowrap;
   color: #f7f3ea;
+}
+
+.plan-pill,
+.node-state {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid rgba(247, 243, 234, 0.12);
+  font-size: 0.72rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.plan-pill.fixed {
+  color: #111;
+  background: #fde047;
+}
+
+.plan-pill.mobility {
+  color: #062d2a;
+  background: #5eead4;
+}
+
+.node-state.active,
+.node-state.inside,
+.node-state.allowed {
+  color: #052e16;
+  background: #86efac;
+}
+
+.node-state.suspended {
+  color: #fff1f2;
+  background: #e11d48;
+}
+
+.node-state.disconnected {
+  color: #f5f5f4;
+  background: #78716c;
+}
+
+.suspended-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  background: rgba(127, 29, 29, 0.22);
+}
+
+.suspended-row span,
+.empty-text {
+  color: #b8afa0;
+  font-size: 0.82rem;
 }
 
 .route-row {
@@ -630,6 +710,123 @@ button {
   background: #2dd4bf;
 }
 
+.router-runtime {
+  display: grid;
+  gap: 12px;
+}
+
+.router-picker-panel {
+  box-shadow: inset 3px 0 0 #ff7ab6;
+}
+
+.panel-shortcuts {
+  margin-top: 4px;
+}
+
+.runtime-summary {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.runtime-summary span:not(.node-state) {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid rgba(247, 243, 234, 0.12);
+  background: rgba(0, 0, 0, 0.2);
+  color: #d8d0c2;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.plan-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.plan-switch button,
+.runtime-form button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(45, 212, 191, 0.42);
+  background: rgba(45, 212, 191, 0.1);
+  color: #ccfbf1;
+  font-weight: 900;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.plan-switch button.selected {
+  color: #111;
+  background: #2dd4bf;
+  border-color: #2dd4bf;
+}
+
+.runtime-form {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+
+.coord-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+}
+
+.mac-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.runtime-form label {
+  display: grid;
+  gap: 5px;
+  color: #b8afa0;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.runtime-form input {
+  width: 100%;
+  height: 38px;
+  min-width: 0;
+  border: 1px solid rgba(247, 243, 234, 0.16);
+  background: #24231f;
+  color: #f7f3ea;
+  padding: 0 10px;
+}
+
+.runtime-button-pair {
+  gap: 6px;
+}
+
+.runtime-form button:disabled,
+.plan-switch button:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.form-message {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.form-message.success {
+  color: #052e16;
+  background: #86efac;
+}
+
+.form-message.error {
+  color: #fff1f2;
+  background: #be123c;
+}
+
 .control-dock {
   position: fixed;
   z-index: 20;
@@ -780,9 +977,21 @@ button {
     grid-template-columns: 14px minmax(0, 1fr);
   }
 
-  .node-satellite {
+  .node-satellite,
+  .node-state,
+  .plan-pill {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .coord-form,
+  .mac-form,
+  .suspended-row {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-button-pair {
+    flex-wrap: wrap;
   }
 
   .handover-main {

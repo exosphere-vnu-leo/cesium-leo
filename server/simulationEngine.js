@@ -9,15 +9,19 @@ import {
 import {
   average,
   clamp,
+  haversineDistanceKm,
   median,
   qualityFromSinr,
   roleLabel,
   round,
   seededRandom
 } from './utils.js';
-import { choosePrimaryRoute } from './domain.js';
+import { choosePrimaryRoute, normalizePlanType } from './domain.js';
+import { DeviceVerificationRegistry } from './deviceVerification.js';
 
 const BYTES_PER_ROUTE_PER_SECOND = 10;
+const FIXED_RADIUS_KM = 0.5;
+const MOBILITY_DISCONNECT_KM = 1000;
 
 export class SimulationEngine {
   constructor(dataConfig) {
@@ -36,6 +40,8 @@ export class SimulationEngine {
 
     this.nodes = buildNodes(this.groundStations, routing.nodeSeeds);
     this.nodeIds = [...this.nodes.keys()].sort((a, b) => a - b);
+    this.verification = new DeviceVerificationRegistry(this.nodes);
+    this.violations = [];
 
     const handovers = loadHandovers(dataConfig.handoverPath, this.satellites);
     this.handoverEvents = handovers.events;
@@ -79,8 +85,10 @@ export class SimulationEngine {
 
   frame(tInput) {
     const t = this.normalizeTime(tInput);
-    const rows = this.routingByTime.get(t) ?? [];
+    const rawRows = this.routingByTime.get(t) ?? [];
+    const rows = this.adjustedRowsForTime(t);
     const routesByNode = this.groupRoutesByNode(rows);
+    const rawRoutesByNode = this.groupRoutesByNode(rawRows);
     const traffic = this.trafficByTime.get(t);
     const disconnectedNodeIds = new Set(
       (this.handoverByTime.get(t) ?? [])
@@ -101,8 +109,12 @@ export class SimulationEngine {
     ].filter((id) => id >= 0);
     const nodes = this.nodeIds.map((id) => {
       const node = this.nodes.get(id);
-      const snapshot = node.summarizeRoutes(routesByNode.get(id) ?? [], traffic?.perNode[id]);
-      return disconnectedNodeIds.has(id) ? { ...snapshot, alive: false } : snapshot;
+      const routes = routesByNode.get(id) ?? [];
+      const rawRoutes = rawRoutesByNode.get(id) ?? [];
+      const snapshot = node.summarizeRoutes(routes, traffic?.perNode[id]);
+      return this.withRuntimeNodeStatus(snapshot, node, t, routes, rawRoutes, {
+        csvDisconnected: disconnectedNodeIds.has(id)
+      });
     });
 
     return {
@@ -115,6 +127,7 @@ export class SimulationEngine {
       orbitTrails: this.orbitTrails(trailSatelliteIds, t),
       nodes,
       links: this.buildActiveLinks(rows, satellites),
+      suspendedRouters: nodes.filter((node) => node.status === 'SUSPENDED'),
       handoverFocus,
       totals: traffic?.totals ?? {
         sentBytes: 0,
@@ -139,9 +152,11 @@ export class SimulationEngine {
     }
 
     const t = this.normalizeTime(tInput);
-    const rows = this.routingByTime.get(t) ?? [];
+    const rawRows = this.routingByTime.get(t) ?? [];
+    const rows = this.adjustedRowsForTime(t);
     const outgoingRoutes = rows.filter((row) => row.srcId === nodeId);
     const incomingRoutes = rows.filter((row) => row.dstId === nodeId);
+    const rawOutgoingRoutes = rawRows.filter((row) => row.srcId === nodeId);
     const primary = choosePrimaryRoute(outgoingRoutes);
     const traffic = this.trafficByTime.get(t)?.perNode[nodeId] ?? emptyTraffic();
     const visibleSatellites = this.visibleSatellitesForNode(node, t, outgoingRoutes);
@@ -153,7 +168,13 @@ export class SimulationEngine {
       t,
       tMs: t * 1000,
       simulationTime: new Date(this.propagationStartDate.getTime() + t * 1000).toISOString(),
-      node: node.summarizeRoutes(outgoingRoutes, traffic),
+      node: this.withRuntimeNodeStatus(
+        node.summarizeRoutes(outgoingRoutes, traffic),
+        node,
+        t,
+        outgoingRoutes,
+        rawOutgoingRoutes
+      ),
       primaryRoute: primary ? this.routeSnapshot(primary) : null,
       activeRoutes: outgoingRoutes.map((route) => this.routeSnapshot(route)),
       incomingRoutes: incomingRoutes.map((route) => this.routeSnapshot(route)),
@@ -202,6 +223,117 @@ export class SimulationEngine {
       byNode.get(row.srcId).push(row);
     }
     return byNode;
+  }
+
+  adjustedRowsForTime(t) {
+    return (this.routingByTime.get(t) ?? [])
+      .map((row) => this.adjustRouteForRuntime(row, t))
+      .filter(Boolean);
+  }
+
+  adjustRouteForRuntime(row, t) {
+    if (this.routeBlockedBySuspension(row, t)) return null;
+
+    let adjusted = row;
+    for (const endpoint of [
+      {
+        nodeId: row.srcId,
+        distField: 'distUlKm',
+        originalLat: row.srcLat,
+        originalLon: row.srcLon,
+        updateSourcePosition: true
+      },
+      {
+        nodeId: row.dstId,
+        distField: 'distDlKm',
+        originalLat: row.nnhLat,
+        originalLon: row.nnhLon,
+        updateSourcePosition: false
+      }
+    ]) {
+      const node = this.nodes.get(endpoint.nodeId);
+      if (!this.mobilityOverrideActive(node, t)) continue;
+
+      const satPoint = this.routeSatellitePoint(row, t);
+      if (satPoint?.lat == null || satPoint?.lon == null) continue;
+      const newDistanceKm = haversineDistanceKm(node.lat, node.lon, satPoint.lat, satPoint.lon);
+      if (newDistanceKm == null || newDistanceKm > MOBILITY_DISCONNECT_KM) return null;
+
+      const originalDistanceKm =
+        haversineDistanceKm(endpoint.originalLat, endpoint.originalLon, satPoint.lat, satPoint.lon) ??
+        row[endpoint.distField];
+      const ratio = Number(originalDistanceKm) > 0 ? Number(originalDistanceKm) / Math.max(1, newDistanceKm) : 1;
+      const sinrDeltaDb = 20 * Math.log10(ratio);
+
+      adjusted = adjusted === row ? { ...row } : adjusted;
+      adjusted[endpoint.distField] = newDistanceKm;
+      adjusted.sinrDlDb += sinrDeltaDb;
+      adjusted.cnTotalDb += sinrDeltaDb;
+      if (endpoint.updateSourcePosition) {
+        adjusted.srcLat = node.lat;
+        adjusted.srcLon = node.lon;
+      }
+    }
+
+    return adjusted;
+  }
+
+  routeBlockedBySuspension(row, t) {
+    return [row.srcId, row.dstId].some((nodeId) => {
+      const node = this.nodes.get(nodeId);
+      return (
+        node?.type === 'router' &&
+        node.suspended &&
+        this.locationOverrideActive(node, t) &&
+        node.suspendedSinceT != null &&
+        t >= node.suspendedSinceT
+      );
+    });
+  }
+
+  routeSatellitePoint(row, t) {
+    if (Number.isFinite(row.satLat) && Number.isFinite(row.satLon)) {
+      return { lat: row.satLat, lon: row.satLon };
+    }
+    return this.satellites[row.nextHopSatId]?.positionAt(this.propagationStartDate, t) ?? null;
+  }
+
+  locationOverrideActive(node, t) {
+    return (
+      node?.locationOverridden &&
+      (node.positionUpdatedAtT == null || t >= node.positionUpdatedAtT)
+    );
+  }
+
+  mobilityOverrideActive(node, t) {
+    return node?.type === 'router' && node.planType === 'MOBILITY' && this.locationOverrideActive(node, t);
+  }
+
+  withRuntimeNodeStatus(snapshot, node, t, routes, rawRoutes, options = {}) {
+    const status = this.runtimeNodeStatus(node, t, routes, rawRoutes, options);
+    const forcedDown = status === 'SUSPENDED' || status === 'DISCONNECTED' || options.csvDisconnected;
+    const relocationDistanceKm = this.locationOverrideActive(node, t) ? node.relocationDistanceKm : 0;
+    return {
+      ...snapshot,
+      alive: forcedDown ? false : snapshot.alive,
+      status,
+      suspended: status === 'SUSPENDED',
+      relocationDistanceKm: round(relocationDistanceKm, 3)
+    };
+  }
+
+  runtimeNodeStatus(node, t, routes, rawRoutes, options = {}) {
+    if (options.csvDisconnected) return 'DISCONNECTED';
+    if (node.type !== 'router') return 'ACTIVE';
+    const overrideActive = this.locationOverrideActive(node, t);
+    if (node.suspended && overrideActive && node.suspendedSinceT != null && t >= node.suspendedSinceT) {
+      return 'SUSPENDED';
+    }
+    if (node.planType === 'MOBILITY' && overrideActive && rawRoutes.length > 0 && routes.length === 0) {
+      return 'DISCONNECTED';
+    }
+    if (node.planType === 'MOBILITY') return 'ALLOWED';
+    return overrideActive && node.relocationDistanceKm > node.homeRadiusKm ? 'SUSPENDED' : 'INSIDE';
   }
 
   buildActiveLinks(rows, satellitePositions) {
@@ -360,14 +492,14 @@ export class SimulationEngine {
   }
 
   rainIndicatorForNode(nodeId, t) {
-    const rows = this.routingByTime.get(t)?.filter((row) => row.srcId === nodeId) ?? [];
+    const rows = this.adjustedRowsForTime(t).filter((row) => row.srcId === nodeId);
     const currentUl = average(rows.map((row) => row.atmUlDb));
     const currentDl = average(rows.map((row) => row.atmDlDb));
     const ulHistory = [];
     const dlHistory = [];
 
     for (let second = Math.max(this.timeRange.min, t - 30); second < t; second += 1) {
-      const secondRows = this.routingByTime.get(second)?.filter((row) => row.srcId === nodeId) ?? [];
+      const secondRows = this.adjustedRowsForTime(second).filter((row) => row.srcId === nodeId);
       const ul = average(secondRows.map((row) => row.atmUlDb));
       const dl = average(secondRows.map((row) => row.atmDlDb));
       if (ul != null) ulHistory.push(ul);
@@ -393,7 +525,7 @@ export class SimulationEngine {
     const start = Math.max(this.timeRange.min, t - 59);
     const series = [];
     for (let second = start; second <= t; second += 1) {
-      const rows = this.routingByTime.get(second)?.filter((row) => row.srcId === nodeId) ?? [];
+      const rows = this.adjustedRowsForTime(second).filter((row) => row.srcId === nodeId);
       series.push({
         t: second,
         uplinkLossDb: round(average(rows.map((row) => row.fsplUlDb + row.atmUlDb)), 2),
@@ -429,6 +561,129 @@ export class SimulationEngine {
         };
       })
       .filter(Boolean);
+  }
+
+  updateRouterLocation(nodeIdInput, { lat: latInput, lon: lonInput, t: tInput } = {}) {
+    const node = this.requireRouter(nodeIdInput);
+    const { lat, lon } = parseLatLon(latInput, lonInput);
+    const t = this.normalizeTime(tInput);
+    const frozenTraffic = this.trafficByTime.get(t)?.perNode[node.id] ?? null;
+
+    node.lat = lat;
+    node.lon = lon;
+    node.locationOverridden = true;
+    node.positionUpdatedAtT = t;
+    node.relocationDistanceKm = haversineDistanceKm(node.homeLat, node.homeLon, lat, lon) ?? 0;
+
+    if (node.planType === 'FIXED') {
+      this.refreshFixedRouterStatus(node, t, frozenTraffic);
+    } else {
+      node.suspended = false;
+      node.suspendedSinceT = null;
+      node.frozenTraffic = null;
+      node.status = 'ALLOWED';
+    }
+
+    this.trafficByTime = this.precomputeTraffic();
+    return this.nodeFrame(node.id, t).node;
+  }
+
+  resetRouterLocation(nodeIdInput) {
+    const node = this.requireRouter(nodeIdInput);
+    node.lat = node.homeLat;
+    node.lon = node.homeLon;
+    node.locationOverridden = false;
+    node.positionUpdatedAtT = null;
+    node.relocationDistanceKm = 0;
+    node.suspended = false;
+    node.suspendedSinceT = null;
+    node.frozenTraffic = null;
+    node.status = node.planType === 'MOBILITY' ? 'ALLOWED' : 'INSIDE';
+    this.trafficByTime = this.precomputeTraffic();
+    return this.nodeFrame(node.id, this.timeRange.min).node;
+  }
+
+  updateRouterPlan(nodeIdInput, planTypeInput, tInput = this.timeRange.min) {
+    const node = this.requireRouter(nodeIdInput);
+    const t = this.normalizeTime(tInput);
+    node.planType = normalizePlanType(planTypeInput);
+
+    if (node.planType === 'MOBILITY') {
+      node.suspended = false;
+      node.suspendedSinceT = null;
+      node.frozenTraffic = null;
+      node.status = 'ALLOWED';
+    } else if (node.locationOverridden) {
+      this.refreshFixedRouterStatus(node, t, this.trafficByTime.get(t)?.perNode[node.id] ?? null);
+    } else {
+      node.suspended = false;
+      node.suspendedSinceT = null;
+      node.frozenTraffic = null;
+      node.status = 'INSIDE';
+    }
+
+    this.trafficByTime = this.precomputeTraffic();
+    return this.nodeFrame(node.id, t).node;
+  }
+
+  updateRouterMac(nodeIdInput, macAddress) {
+    const node = this.requireRouter(nodeIdInput);
+    const verifiedMac = this.verification.verifyMac(node.id, macAddress);
+    node.macAddress = verifiedMac;
+    return {
+      node: node.baseSnapshot(),
+      verified: true
+    };
+  }
+
+  refreshFixedRouterStatus(node, t, frozenTraffic = null) {
+    if (!node.locationOverridden) {
+      node.suspended = false;
+      node.suspendedSinceT = null;
+      node.frozenTraffic = null;
+      node.status = 'INSIDE';
+      return;
+    }
+
+    if (node.relocationDistanceKm > FIXED_RADIUS_KM) {
+      const wasSuspended = node.suspended;
+      node.suspended = true;
+      node.suspendedSinceT = t;
+      node.frozenTraffic = frozenTraffic ? { ...frozenTraffic } : null;
+      node.status = 'SUSPENDED';
+      if (!wasSuspended) this.recordViolation(node, 'FIXED_GEOFENCE');
+      return;
+    }
+
+    node.suspended = false;
+    node.suspendedSinceT = null;
+    node.frozenTraffic = null;
+    node.status = 'INSIDE';
+  }
+
+  recordViolation(node, reason) {
+    this.violations.unshift({
+      device_id: String(node.id),
+      timestamp: new Date().toISOString(),
+      dist_km: round(node.relocationDistanceKm, 3),
+      reason
+    });
+    this.violations = this.violations.slice(0, 100);
+  }
+
+  getViolations(limitInput = 50) {
+    const limit = clamp(Number(limitInput) || 50, 1, 100);
+    return this.violations.slice(0, limit);
+  }
+
+  requireRouter(nodeIdInput) {
+    const node = this.nodes.get(Number(nodeIdInput));
+    if (!node || node.type !== 'router') {
+      const error = new Error(`Unknown router id: ${nodeIdInput}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return node;
   }
 
   estimatePropagationOffset() {
@@ -469,7 +724,7 @@ export class SimulationEngine {
     }
 
     for (const t of this.sortedTimes) {
-      const rows = this.routingByTime.get(t) ?? [];
+      const rows = this.adjustedRowsForTime(t);
       for (const row of rows) {
         if (!cumulative.has(row.srcId)) cumulative.set(row.srcId, emptyTraffic());
         if (!cumulative.has(row.dstId)) cumulative.set(row.dstId, emptyTraffic());
@@ -491,6 +746,18 @@ export class SimulationEngine {
         } else {
           srcTraffic.failedBytes += BYTES_PER_ROUTE_PER_SECOND;
           totalFailed += BYTES_PER_ROUTE_PER_SECOND;
+        }
+      }
+
+      for (const node of this.nodes.values()) {
+        if (
+          node.type === 'router' &&
+          node.suspended &&
+          node.frozenTraffic &&
+          node.suspendedSinceT != null &&
+          t >= node.suspendedSinceT
+        ) {
+          cumulative.set(node.id, { ...node.frozenTraffic });
         }
       }
 
@@ -545,4 +812,20 @@ export function emptyTraffic() {
     downlinkBytes: 0,
     failedBytes: 0
   };
+}
+
+function parseLatLon(latInput, lonInput) {
+  const lat = Number(latInput);
+  const lon = Number(lonInput);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+    const error = new Error('Latitude must be a number between -90 and 90');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!Number.isFinite(lon) || lon < -180 || lon > 180) {
+    const error = new Error('Longitude must be a number between -180 and 180');
+    error.statusCode = 400;
+    throw error;
+  }
+  return { lat, lon };
 }

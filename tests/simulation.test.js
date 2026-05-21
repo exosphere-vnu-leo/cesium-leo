@@ -76,6 +76,48 @@ describe('data normalization and simulation engine', () => {
     expect(detail.lossSeries.length).toBe(1);
     expect(detail.node.quality.level).toBe('good');
   });
+
+  test('starts with every node valid and no suspended routers', () => {
+    const localEngine = new SimulationEngine(config.data);
+    const frame = localEngine.frame(0);
+    expect(frame.nodes.every((node) => node.alive)).toBe(true);
+    expect(frame.suspendedRouters).toHaveLength(0);
+    expect(frame.nodes.filter((node) => node.type === 'router').every((node) => node.relocationDistanceKm === 0)).toBe(true);
+  });
+
+  test('suspends fixed routers only after an out-of-home coordinate update and freezes traffic', () => {
+    const localEngine = new SimulationEngine(config.data);
+    const before = localEngine.nodeFrame(43, 12).node.traffic.sentBytes;
+    localEngine.updateRouterLocation(43, { lat: 17.2, lon: 107.9, t: 12 });
+
+    expect(localEngine.nodeFrame(43, 0).node.status).toBe('INSIDE');
+    const after = localEngine.nodeFrame(43, 30);
+    expect(after.node.status).toBe('SUSPENDED');
+    expect(after.node.alive).toBe(false);
+    expect(after.node.traffic.sentBytes).toBe(before);
+    expect(localEngine.frame(30).suspendedRouters.map((node) => node.id)).toContain(43);
+  });
+
+  test('mobility routers scale SINR by the new satellite distance and disconnect past 1000km', () => {
+    const localEngine = new SimulationEngine(config.data);
+    const baseline = localEngine.nodeFrame(44, 0).activeRoutes.find((route) => route.satelliteId === 13);
+    localEngine.updateRouterLocation(44, { lat: 26.4365, lon: 109.8332, t: 0 });
+    const closer = localEngine.nodeFrame(44, 0).activeRoutes.find((route) => route.satelliteId === 13);
+    localEngine.updateRouterLocation(44, { lat: -60, lon: -120, t: 0 });
+    const disconnected = localEngine.nodeFrame(44, 0);
+
+    expect(closer.sinrDlDb).toBeGreaterThan(baseline.sinrDlDb);
+    expect(disconnected.node.status).toBe('DISCONNECTED');
+    expect(disconnected.activeRoutes).toHaveLength(0);
+  });
+
+  test('router MAC verification accepts the provisioned MAC and rejects spoofing', () => {
+    const localEngine = new SimulationEngine(config.data);
+    const originalMac = localEngine.nodes.get(43).macAddress;
+
+    expect(localEngine.updateRouterMac(43, originalMac).verified).toBe(true);
+    expect(() => localEngine.updateRouterMac(43, 'AA:BB:CC:DD:EE:FF')).toThrow(/MAC verification failed/);
+  });
 });
 
 describe('api', () => {
@@ -94,5 +136,29 @@ describe('api', () => {
 
     const handovers = await request(app).get('/api/handovers?from=503&to=503&nodeId=41').expect(200);
     expect(handovers.body.events.some((event) => event.event === 'handover')).toBe(true);
+  });
+
+  test('serves router runtime update APIs', async () => {
+    const localEngine = new SimulationEngine(config.data);
+    const localApp = createApp(localEngine);
+    const originalMac = localEngine.nodes.get(43).macAddress;
+
+    await request(localApp)
+      .post('/api/routers/43/location')
+      .send({ lat: 17.2, lon: 107.9, t: 0 })
+      .expect(200);
+
+    const frame = await request(localApp).get('/api/frame?t=1').expect(200);
+    expect(frame.body.suspendedRouters.map((node) => node.id)).toContain(43);
+
+    await request(localApp)
+      .post('/api/routers/43/mac')
+      .send({ macAddress: originalMac })
+      .expect(200);
+
+    await request(localApp)
+      .post('/api/routers/43/mac')
+      .send({ macAddress: 'AA:BB:CC:DD:EE:FF' })
+      .expect(409);
   });
 });

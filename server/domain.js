@@ -93,6 +93,16 @@ export class NetworkNode {
     this.type = nodeTypeFromName(this.canonicalName);
     this.lat = lat;
     this.lon = lon;
+    this.homeLat = lat;
+    this.homeLon = lon;
+    this.homeRadiusKm = null;
+    this.planType = null;
+    this.status = 'ACTIVE';
+    this.locationOverridden = false;
+    this.positionUpdatedAtT = null;
+    this.relocationDistanceKm = 0;
+    this.suspended = false;
+    this.suspendedSinceT = null;
     this.minElevationDeg = minElevationDeg ?? 0;
   }
 
@@ -104,6 +114,14 @@ export class NetworkNode {
       type: this.type,
       lat: this.lat,
       lon: this.lon,
+      homeLat: this.homeLat,
+      homeLon: this.homeLon,
+      homeRadiusKm: this.homeRadiusKm,
+      planType: this.planType,
+      status: this.status,
+      suspended: this.suspended,
+      relocationDistanceKm: round(this.relocationDistanceKm, 3),
+      macAddress: this.macAddress ?? null,
       minElevationDeg: this.minElevationDeg
     };
   }
@@ -138,6 +156,7 @@ export class Gateway extends NetworkNode {
   constructor(args) {
     super(args);
     this.type = 'gateway';
+    this.status = 'ACTIVE';
   }
 }
 
@@ -145,6 +164,14 @@ export class Router extends NetworkNode {
   constructor(args) {
     super(args);
     this.type = 'router';
+    this.planType = normalizePlanType(args.planType ?? defaultRouterPlan(args.id));
+    this.homeLat = this.lat;
+    this.homeLon = this.lon;
+    this.homeRadiusKm = 0.5;
+    this.status = this.planType === 'MOBILITY' ? 'ALLOWED' : 'INSIDE';
+    this.macAddress = args.macAddress ?? deterministicMacAddress(this.id, this.canonicalName);
+    this.originalMacAddress = this.macAddress;
+    this.hardwareSerial = args.hardwareSerial ?? `VNU-LEO-${String(this.id).padStart(3, '0')}`;
   }
 }
 
@@ -158,4 +185,30 @@ export function choosePrimaryRoute(routes) {
 
 function nodeRoleLabel(type) {
   return type === 'router' ? 'UT (29.5GHz/19.7GHz)' : 'GW (27.5GHz/17.7GHz)';
+}
+
+export function normalizePlanType(planType) {
+  const value = String(planType ?? '').trim().toUpperCase();
+  if (value === 'FIXED' || value === 'MOBILITY') return value;
+  const error = new Error(`Unsupported plan type: ${planType}`);
+  error.statusCode = 400;
+  throw error;
+}
+
+function defaultRouterPlan(id) {
+  return Number(id) % 2 === 0 ? 'MOBILITY' : 'FIXED';
+}
+
+function deterministicMacAddress(id, name) {
+  let hash = 2166136261;
+  const source = `${id}:${name}`;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  const bytes = [0x02];
+  for (let index = 0; index < 5; index += 1) {
+    bytes.push((hash >>> (index * 5)) & 0xff);
+  }
+  return bytes.map((byte) => byte.toString(16).padStart(2, '0')).join(':').toUpperCase();
 }
